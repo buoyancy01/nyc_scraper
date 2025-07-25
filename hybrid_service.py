@@ -42,7 +42,7 @@ class HybridViolationsService:
         logger.info(f"🚀 Getting complete violation data for {license_plate} ({state})")
         
         result = {
-            'license_plate': license_plate.upper(),
+            'plate_number': license_plate.upper(),
             'state': state.upper(),
             'violations': [],
             'total_violations': 0,
@@ -118,3 +118,19 @@ class HybridViolationsService:
             logger.error(result['error'])
             
             return result
+            
+    async def search_hybrid(self, request_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Hybrid search with API + scraping enhancement"""
+        return await self.get_complete_violation_data(
+            request_data['plate_number'],
+            request_data['state'],
+            enhance_with_scraping=True
+        )
+    
+    async def search_api_only(self, request_data: Dict[str, Any]) -> Dict[str, Any]:
+        """API-only search without web scraping"""
+        return await self.get_complete_violation_data(
+            request_data['plate_number'], 
+            request_data['state'],
+            enhance_with_scraping=False
+        )
