@@ -79,14 +79,10 @@ async def hybrid_search(request: SearchRequest):
     if not hybrid_service:
         raise HTTPException(status_code=500, detail="Service not initialized")
     
-    logger.info(f"🔍 Hybrid search: {request.plate} ({request.state})")
+    logger.info(f"🔍 Hybrid search: {request.plate_number} ({request.state})")
     
     try:
-        result = await hybrid_service.get_complete_violation_data(
-            request.plate,
-            request.state,
-            enhance_with_scraping=request.enhance
-        )
+        result = await hybrid_service.search_hybrid(request.dict())
         
         if not result['success']:
             raise HTTPException(status_code=400, detail=result['error'])
@@ -94,42 +90,42 @@ async def hybrid_search(request: SearchRequest):
         return SearchResponse(**result)
         
     except Exception as e:
-        logger.error(f"❌ Search failed: {e}")
+        logger.error(f"❌ Hybrid search failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/violations/{plate}/{state}")
-async def api_only_search(plate: str, state: str):
+@app.post("/api_search", response_model=SearchResponse)
+async def api_only_search(request: SearchRequest):
     """API-only search (fast, no web scraping)"""
     
     if not hybrid_service:
         raise HTTPException(status_code=500, detail="Service not initialized")
     
-    logger.info(f"📊 API search: {plate} ({state})")
+    logger.info(f"📊 API search: {request.plate_number} ({request.state})")
     
     try:
-        result = await hybrid_service.api_client.search_violations(plate, state)
+        result = await hybrid_service.search_api_only(request.dict())
         
         if not result['success']:
             raise HTTPException(status_code=400, detail=result['error'])
         
-        return result
+        return SearchResponse(**result)
         
     except Exception as e:
         logger.error(f"❌ API search failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/download-pdf/{summons_number}")
-async def download_pdf(summons_number: str):
-    """Download PDF for a specific summons"""
+@app.get("/pdf/{plate_number}/{violation_number}")
+async def download_pdf(plate_number: str, violation_number: str):
+    """Download PDF for a specific violation"""
     
-    pdf_path = f"{settings.PDF_DIR}/{summons_number}.pdf"
+    pdf_path = f"pdfs/{plate_number}_{violation_number}.pdf"
     
     try:
         return FileResponse(
             path=pdf_path,
-            filename=f"{summons_number}.pdf",
+            filename=f"{plate_number}_{violation_number}.pdf",
             media_type="application/pdf"
         )
     except FileNotFoundError:
@@ -153,6 +149,16 @@ async def health_check():
     return health
 
 
+@app.get("/csb-sw.js")
+async def service_worker():
+    """Service worker file (empty)"""
+    return HTMLResponse(
+        content="// Service Worker\nconsole.log('Service worker loaded');",
+        media_type="application/javascript"
+    )
+
+
+@app.get("/stats")
 @app.get("/statistics")
 async def get_statistics():
     """Get system statistics"""
