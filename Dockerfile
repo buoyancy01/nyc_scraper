@@ -33,7 +33,7 @@ RUN playwright install-deps chromium
 COPY . .
 
 # Create necessary directories
-RUN mkdir -p /app/pdfs /app/logs /app/templates
+RUN mkdir -p /app/pdfs /app/logs
 
 # Expose the port
 EXPOSE $PORT
