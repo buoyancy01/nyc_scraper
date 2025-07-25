@@ -11,9 +11,10 @@ class ViolationData(BaseModel):
     """Enhanced violation data structure"""
     
     # Basic violation info
-    plate: str
+    plate_number: str
     state: str
     license_type: Optional[str] = None
+    violation_number: str
     summons_number: str
     violation_code: str
     violation_description: str
@@ -32,16 +33,19 @@ class ViolationData(BaseModel):
     amount_due: float = 0.0
     
     # Location and agency
+    violation_location: Optional[str] = None
     precinct: Optional[str] = None
     county: Optional[str] = None
     issuing_agency: Optional[str] = None
     
     # Status and documents
     status: str = "UNKNOWN"
+    pdf_available: bool = False
     summons_image: Optional[Dict[str, str]] = None
     local_pdf_path: Optional[str] = None
     
     # Enhanced data from web scraping
+    enhanced_by_scraping: bool = False
     hearing_status: Optional[str] = None
     hearing_date: Optional[str] = None
     hearing_location: Optional[str] = None
@@ -86,7 +90,7 @@ class ScrapingStatus(BaseModel):
 class SearchRequest(BaseModel):
     """Request for violation search"""
     
-    plate: str = Field(..., min_length=1, max_length=10)
+    plate_number: str = Field(..., min_length=1, max_length=10)
     state: str = Field(..., min_length=2, max_length=2)
     enhance: bool = False
     download_pdfs: bool = False
@@ -96,7 +100,7 @@ class SearchRequest(BaseModel):
 class SearchResponse(BaseModel):
     """Response for violation search"""
     
-    license_plate: str
+    plate_number: str
     state: str
     violations: List[ViolationData]
     total_violations: int
