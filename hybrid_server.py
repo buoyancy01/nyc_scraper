@@ -55,7 +55,7 @@ app = FastAPI(
 async def dashboard():
     """Serve the main dashboard"""
     try:
-        with open("/project/workspace/nyc-scraper-improved/enhanced_dashboard.html", "r") as f:
+        with open("enhanced_dashboard.html", "r") as f:
             return HTMLResponse(content=f.read())
     except FileNotFoundError:
         return HTMLResponse(content="""
