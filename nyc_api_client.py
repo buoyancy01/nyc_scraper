@@ -58,12 +58,12 @@ class NYCViolationsAPI:
             # Fetch all violations with pagination
             violations_data = await self._fetch_all_violations(plate, state, limit)
             
-            # Convert to ViolationData objects
+            # Convert to ViolationData objects and then to dicts
             violations = []
             for item in violations_data:
                 try:
                     violation = self._parse_violation(item, plate, state)
-                    violations.append(violation)
+                    violations.append(violation.dict())  # Convert to dict
                 except Exception as e:
                     logger.warning(f"Failed to parse violation: {e}")
                     continue
@@ -75,7 +75,7 @@ class NYCViolationsAPI:
             self.total_response_time += processing_time
             
             result = {
-                'license_plate': plate,
+                'plate_number': plate,
                 'state': state,
                 'violations': violations,
                 'total_violations': len(violations),
@@ -99,7 +99,7 @@ class NYCViolationsAPI:
             logger.error(error_msg)
             
             return {
-                'license_plate': plate,
+                'plate_number': plate,
                 'state': state,
                 'violations': [],
                 'total_violations': 0,
@@ -120,6 +120,8 @@ class NYCViolationsAPI:
         offset = 0
         batch_size = 1000  # API limit per request
         
+        logger.info(f"Fetching violations for {plate} ({state}) from {self.base_url}")
+        
         while True:
             # Build query parameters
             params = {
@@ -129,14 +131,24 @@ class NYCViolationsAPI:
                 '$order': 'issue_date DESC'
             }
             
+            logger.debug(f"API request params: {params}")
+            
             try:
                 async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=self.timeout)) as session:
                     async with session.get(self.base_url, params=params) as response:
+                        logger.info(f"API response status: {response.status}")
+                        
                         if response.status == 200:
                             batch_data = await response.json()
+                            logger.info(f"Received {len(batch_data)} violations in this batch")
                             
                             if not batch_data:
+                                logger.info("No more data available")
                                 break  # No more data
+                            
+                            # Log sample data for debugging
+                            if batch_data:
+                                logger.debug(f"Sample violation data: {batch_data[0]}")
                             
                             all_violations.extend(batch_data)
                             
@@ -155,14 +167,15 @@ class NYCViolationsAPI:
                             await asyncio.sleep(0.1)
                             
                         else:
-                            logger.warning(f"API returned status {response.status}")
+                            response_text = await response.text()
+                            logger.error(f"API returned status {response.status}: {response_text}")
                             break
                             
             except Exception as e:
                 logger.error(f"Error fetching batch at offset {offset}: {e}")
                 break
         
-        logger.debug(f"Fetched {len(all_violations)} total violations")
+        logger.info(f"Fetched {len(all_violations)} total violations")
         return all_violations
     
     def _parse_violation(self, data: Dict[str, Any], plate: str, state: str) -> ViolationData:
@@ -191,9 +204,10 @@ class NYCViolationsAPI:
             }
         
         return ViolationData(
-            plate=plate,
+            plate_number=plate,
             state=safe_str(data.get('registration_state', state)),
             license_type=safe_str(data.get('license_type')),
+            violation_number=safe_str(data.get('summons_number', '')),  # Use summons_number as violation_number
             summons_number=safe_str(data.get('summons_number', '')),
             violation_code=safe_str(data.get('violation_code', '')),
             violation_description=safe_str(data.get('violation_description', '')),
@@ -209,11 +223,14 @@ class NYCViolationsAPI:
             payment_amount=safe_float(data.get('payment_amount')),
             amount_due=safe_float(data.get('amount_due')),
             
+            violation_location=safe_str(data.get('violation_location') or data.get('street_name') or data.get('house_number')),
             precinct=safe_str(data.get('precinct')),
             county=safe_str(data.get('county')),
             issuing_agency=safe_str(data.get('issuing_agency')),
             
             status=self._determine_status(data),
+            pdf_available=bool(data.get('summons_number')),  # PDF available if summons_number exists
+            enhanced_by_scraping=False,  # Initially false, will be updated by scraper
             summons_image=summons_image,
             local_pdf_path=None,
             
