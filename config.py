@@ -22,7 +22,7 @@ class Settings:
     NYC_API_TIMEOUT: int = int(os.getenv("NYC_API_TIMEOUT", "30"))
     
     # 2Captcha settings
-    TWOCAPTCHA_API_KEY: Optional[str] = os.getenv("TWOCAPTCHA_API_KEY")
+    TWOCAPTCHA_API_KEY: Optional[str] = os.getenv("CAPTCHA_API_KEY")  # Changed from TWOCAPTCHA_API_KEY
     CAPTCHA_TIMEOUT: int = int(os.getenv("CAPTCHA_TIMEOUT", "300"))
     
     # Proxy settings
