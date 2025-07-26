@@ -58,12 +58,12 @@ class NYCViolationsAPI:
             # Fetch all violations with pagination
             violations_data = await self._fetch_all_violations(plate, state, limit)
             
-            # Convert to ViolationData objects and then to dicts
+            # Convert to ViolationData objects
             violations = []
             for item in violations_data:
                 try:
                     violation = self._parse_violation(item, plate, state)
-                    violations.append(violation.dict())  # Convert to dict
+                    violations.append(violation)
                 except Exception as e:
                     logger.warning(f"Failed to parse violation: {e}")
                     continue
@@ -75,9 +75,9 @@ class NYCViolationsAPI:
             self.total_response_time += processing_time
             
             result = {
-                'plate_number': plate,
+                'plate_number': plate,  # Changed from license_plate
                 'state': state,
-                'violations': violations,
+                'violations': [v.dict() for v in violations],  # Convert to dicts
                 'total_violations': len(violations),
                 'processing_time': processing_time,
                 'success': True,
@@ -99,7 +99,7 @@ class NYCViolationsAPI:
             logger.error(error_msg)
             
             return {
-                'plate_number': plate,
+                'plate_number': plate,  # Changed from license_plate
                 'state': state,
                 'violations': [],
                 'total_violations': 0,
