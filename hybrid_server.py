@@ -1,197 +1,281 @@
 """
-Hybrid NYC Violations Server
-FastAPI server providing both API and web scraping capabilities
+Enhanced NYC Open Data API Client
+Fetches parking violation data with pagination, rate limiting, and error handling
 """
 
 import asyncio
+import aiohttp
 import logging
 from datetime import datetime
-from typing import Dict, Any, Optional
-from contextlib import asynccontextmanager
+from typing import Dict, List, Any, Optional
+import time
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, FileResponse
-from pydantic import BaseModel
-
-from hybrid_service import HybridViolationsService
-from models import SearchRequest, SearchResponse, HealthCheck
+from models import ViolationData
 from config import settings
 
-# Configure logging
-logging.basicConfig(level=getattr(logging, settings.LOG_LEVEL))
 logger = logging.getLogger(__name__)
 
-# Global service instance
-hybrid_service: Optional[HybridViolationsService] = None
-server_start_time = datetime.now()
 
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Application lifespan manager"""
-    global hybrid_service
+class NYCViolationsAPI:
+    """Enhanced client for NYC Open Data parking violations API"""
     
-    # Startup
-    logger.info("🚀 Starting NYC Hybrid Violations Server")
-    hybrid_service = HybridViolationsService()
-    
-    yield
-    
-    # Shutdown
-    logger.info("🛑 Shutting down server")
-
-
-# Create FastAPI app
-app = FastAPI(
-    title="NYC Violations Hybrid Scraper",
-    description="Combines NYC Open Data API with web scraping for complete violation information",
-    version="1.0.0",
-    lifespan=lifespan
-)
-
-
-@app.get("/", response_class=HTMLResponse)
-async def dashboard():
-    """Serve the main dashboard"""
-    try:
-        with open("enhanced_dashboard.html", "r") as f:
-            return HTMLResponse(content=f.read())
-    except FileNotFoundError:
-        return HTMLResponse(content="""
-        <html><body>
-        <h1>NYC Violations Hybrid Scraper</h1>
-        <p>Dashboard loading...</p>
-        <h2>API Endpoints:</h2>
-        <ul>
-            <li>POST /search - Hybrid search with web scraping</li>
-            <li>GET /violations/{plate}/{state} - API-only search</li>
-            <li>GET /health - System health check</li>
-        </ul>
-        </body></html>
-        """)
-
-
-@app.post("/search", response_model=SearchResponse)
-async def hybrid_search(request: SearchRequest):
-    """Perform hybrid search (API + web scraping)"""
-    
-    if not hybrid_service:
-        raise HTTPException(status_code=500, detail="Service not initialized")
-    
-    logger.info(f"🔍 Hybrid search: {request.plate_number} ({request.state})")
-    
-    try:
-        result = await hybrid_service.search_hybrid(request.dict())
+    def __init__(self):
+        self.base_url = settings.NYC_API_BASE_URL
+        self.timeout = settings.NYC_API_TIMEOUT
+        self.rate_limit = settings.API_RATE_LIMIT
+        self.last_request_time = 0
         
-        if not result['success']:
-            raise HTTPException(status_code=400, detail=result['error'])
+        # Performance tracking
+        self.request_count = 0
+        self.total_response_time = 0
         
-        return SearchResponse(**result)
+    async def search_violations(self, 
+                              license_plate: str, 
+                              state: str = "NY",
+                              limit: Optional[int] = None) -> Dict[str, Any]:
+        """
+        Search for parking violations by license plate and state
         
-    except Exception as e:
-        logger.error(f"❌ Hybrid search failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api_search", response_model=SearchResponse)
-async def api_only_search(request: SearchRequest):
-    """API-only search (fast, no web scraping)"""
-    
-    if not hybrid_service:
-        raise HTTPException(status_code=500, detail="Service not initialized")
-    
-    logger.info(f"📊 API search: {request.plate_number} ({request.state})")
-    
-    try:
-        result = await hybrid_service.search_api_only(request.dict())
+        Args:
+            license_plate: License plate number
+            state: State abbreviation (2 letters)
+            limit: Maximum number of violations to return
+            
+        Returns:
+            Dictionary with violations data and metadata
+        """
         
-        if not result['success']:
-            raise HTTPException(status_code=400, detail=result['error'])
+        start_time = time.time()
+        plate = license_plate.upper().strip()
+        state = state.upper().strip()
         
-        return SearchResponse(**result)
+        logger.info(f"🔍 Searching violations for {plate} ({state})")
         
-    except Exception as e:
-        logger.error(f"❌ API search failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/pdf/{plate_number}/{violation_number}")
-async def download_pdf(plate_number: str, violation_number: str):
-    """Download PDF for a specific violation"""
-    
-    pdf_path = f"pdfs/{plate_number}_{violation_number}.pdf"
-    
-    try:
-        return FileResponse(
-            path=pdf_path,
-            filename=f"{plate_number}_{violation_number}.pdf",
-            media_type="application/pdf"
-        )
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="PDF not found")
-
-
-@app.get("/health", response_model=HealthCheck)
-async def health_check():
-    """System health check"""
-    
-    uptime = (datetime.now() - server_start_time).total_seconds()
-    
-    health = HealthCheck(
-        status="healthy",
-        uptime_seconds=uptime,
-        captcha_service=settings.has_captcha_key,
-        proxy_service=settings.has_proxies,
-        database=settings.has_database
-    )
-    
-    return health
-
-
-@app.get("/csb-sw.js")
-async def service_worker():
-    """Service worker file (empty)"""
-    return HTMLResponse(
-        content="// Service Worker\nconsole.log('Service worker loaded');",
-        media_type="application/javascript"
-    )
-
-
-@app.get("/stats")
-@app.get("/statistics")
-async def get_statistics():
-    """Get system statistics"""
-    
-    if not hybrid_service:
-        return {"error": "Service not initialized"}
-    
-    try:
-        api_stats = await hybrid_service.api_client.get_statistics()
-        
-        stats = {
-            "server_uptime": (datetime.now() - server_start_time).total_seconds(),
-            "api_client": api_stats,
-            "configuration": {
-                "has_captcha_key": settings.has_captcha_key,
-                "has_proxies": settings.has_proxies,
-                "max_scrape_violations": settings.MAX_SCRAPE_VIOLATIONS,
-                "downloads_directory": settings.DOWNLOADS_DIR
+        try:
+            # Rate limiting
+            await self._rate_limit()
+            
+            # Fetch all violations with pagination
+            violations_data = await self._fetch_all_violations(plate, state, limit)
+            
+            # Convert to ViolationData objects and then to dicts
+            violations = []
+            for item in violations_data:
+                try:
+                    violation = self._parse_violation(item, plate, state)
+                    violations.append(violation.dict())  # Convert to dict
+                except Exception as e:
+                    logger.warning(f"Failed to parse violation: {e}")
+                    continue
+            
+            processing_time = time.time() - start_time
+            
+            # Update performance metrics
+            self.request_count += 1
+            self.total_response_time += processing_time
+            
+            result = {
+                'plate_number': plate,
+                'state': state,
+                'violations': violations,
+                'total_violations': len(violations),
+                'processing_time': processing_time,
+                'success': True,
+                'error': None,
+                'debug_info': {
+                    'api_url': self.base_url,
+                    'raw_count': len(violations_data),
+                    'parsed_count': len(violations)
+                },
+                'raw_data': violations_data[:5] if violations_data else []  # Sample for debugging
             }
+            
+            logger.info(f"✅ Found {len(violations)} violations in {processing_time:.2f}s")
+            return result
+            
+        except Exception as e:
+            processing_time = time.time() - start_time
+            error_msg = f"API search failed: {str(e)}"
+            logger.error(error_msg)
+            
+            return {
+                'plate_number': plate,
+                'state': state,
+                'violations': [],
+                'total_violations': 0,
+                'processing_time': processing_time,
+                'success': False,
+                'error': error_msg,
+                'debug_info': {'api_url': self.base_url},
+                'raw_data': []
+            }
+    
+    async def _fetch_all_violations(self, 
+                                  plate: str, 
+                                  state: str, 
+                                  limit: Optional[int] = None) -> List[Dict]:
+        """Fetch all violations with pagination"""
+        
+        all_violations = []
+        offset = 0
+        batch_size = 1000  # API limit per request
+        
+        logger.info(f"Fetching violations for {plate} ({state}) from {self.base_url}")
+        
+        while True:
+            # Build query parameters
+            params = {
+                '$where': f"plate='{plate}' AND registration_state='{state}'",
+                '$limit': min(batch_size, limit - len(all_violations)) if limit else batch_size,
+                '$offset': offset,
+                '$order': 'issue_date DESC'
+            }
+            
+            logger.debug(f"API request params: {params}")
+            
+            try:
+                async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=self.timeout)) as session:
+                    async with session.get(self.base_url, params=params) as response:
+                        logger.info(f"API response status: {response.status}")
+                        
+                        if response.status == 200:
+                            batch_data = await response.json()
+                            logger.info(f"Received {len(batch_data)} violations in this batch")
+                            
+                            if not batch_data:
+                                logger.info("No more data available")
+                                break  # No more data
+                            
+                            # Log sample data for debugging
+                            if batch_data:
+                                logger.debug(f"Sample violation data: {batch_data[0]}")
+                            
+                            all_violations.extend(batch_data)
+                            
+                            # Check if we've reached the limit
+                            if limit and len(all_violations) >= limit:
+                                all_violations = all_violations[:limit]
+                                break
+                            
+                            # Check if we got less than batch_size (last page)
+                            if len(batch_data) < batch_size:
+                                break
+                            
+                            offset += batch_size
+                            
+                            # Small delay between requests
+                            await asyncio.sleep(0.1)
+                            
+                        else:
+                            response_text = await response.text()
+                            logger.error(f"API returned status {response.status}: {response_text}")
+                            break
+                            
+            except Exception as e:
+                logger.error(f"Error fetching batch at offset {offset}: {e}")
+                break
+        
+        logger.info(f"Fetched {len(all_violations)} total violations")
+        return all_violations
+    
+    def _parse_violation(self, data: Dict[str, Any], plate: str, state: str) -> ViolationData:
+        """Parse raw API data into ViolationData object"""
+        
+        # Helper function to safely get float values
+        def safe_float(value) -> float:
+            try:
+                return float(value) if value else 0.0
+            except (ValueError, TypeError):
+                return 0.0
+        
+        # Helper function to safely get string values
+        def safe_str(value) -> Optional[str]:
+            return str(value).strip() if value else None
+        
+        # Parse summons image URL
+        summons_image = None
+        if data.get('summons_number'):
+            # Construct the NYCServ PDF URL
+            import base64
+            search_id = base64.b64encode(data['summons_number'].encode()).decode()
+            summons_image = {
+                'url': f"http://nycserv.nyc.gov/NYCServWeb/ShowImage?searchID={search_id}&locationName=_____________________",
+                'description': 'View Summons'
+            }
+        
+        return ViolationData(
+            plate_number=plate,
+            state=safe_str(data.get('registration_state', state)),
+            license_type=safe_str(data.get('license_type')),
+            violation_number=safe_str(data.get('summons_number', '')),  # Use summons_number as violation_number
+            summons_number=safe_str(data.get('summons_number', '')),
+            violation_code=safe_str(data.get('violation_code', '')),
+            violation_description=safe_str(data.get('violation_description', '')),
+            
+            issue_date=safe_str(data.get('issue_date', '')),
+            violation_time=safe_str(data.get('violation_time')),
+            judgment_entry_date=safe_str(data.get('judgment_entry_date')),
+            
+            fine_amount=safe_float(data.get('fine_amount')),
+            penalty_amount=safe_float(data.get('penalty_amount')),
+            interest_amount=safe_float(data.get('interest_amount')),
+            reduction_amount=safe_float(data.get('reduction_amount')),
+            payment_amount=safe_float(data.get('payment_amount')),
+            amount_due=safe_float(data.get('amount_due')),
+            
+            violation_location=safe_str(data.get('violation_location') or data.get('street_name') or data.get('house_number')),
+            precinct=safe_str(data.get('precinct')),
+            county=safe_str(data.get('county')),
+            issuing_agency=safe_str(data.get('issuing_agency')),
+            
+            status=self._determine_status(data),
+            pdf_available=bool(data.get('summons_number')),  # PDF available if summons_number exists
+            enhanced_by_scraping=False,  # Initially false, will be updated by scraper
+            summons_image=summons_image,
+            local_pdf_path=None,
+            
+            last_updated=datetime.now()
+        )
+    
+    def _determine_status(self, data: Dict[str, Any]) -> str:
+        """Determine violation status from API data"""
+        
+        amount_due = float(data.get('amount_due', 0))
+        payment_amount = float(data.get('payment_amount', 0))
+        fine_amount = float(data.get('fine_amount', 0))
+        
+        if amount_due <= 0 and payment_amount > 0:
+            return "PAID"
+        elif amount_due > 0:
+            return "OUTSTANDING"
+        else:
+            return "UNKNOWN"
+    
+    async def _rate_limit(self):
+        """Simple rate limiting to avoid overwhelming the API"""
+        
+        current_time = time.time()
+        time_since_last = current_time - self.last_request_time
+        min_interval = 60.0 / self.rate_limit  # seconds between requests
+        
+        if time_since_last < min_interval:
+            wait_time = min_interval - time_since_last
+            await asyncio.sleep(wait_time)
+        
+        self.last_request_time = time.time()
+    
+    async def get_statistics(self) -> Dict[str, Any]:
+        """Get API client performance statistics"""
+        
+        avg_response_time = (
+            self.total_response_time / self.request_count 
+            if self.request_count > 0 else 0
+        )
+        
+        return {
+            'total_requests': self.request_count,
+            'average_response_time': avg_response_time,
+            'api_endpoint': self.base_url,
+            'rate_limit': self.rate_limit,
+            'timeout': self.timeout
         }
-        
-        return stats
-        
-    except Exception as e:
-        logger.error(f"❌ Failed to get statistics: {e}")
-        return {"error": str(e)}
-
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(
-        app, 
-        host=settings.HOST, 
-        port=settings.PORT,
-        log_level=settings.LOG_LEVEL.lower()
-    )
